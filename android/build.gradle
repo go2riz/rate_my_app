@@ -8,7 +8,7 @@ apply plugin: 'kotlin-android'
 
 android {
     namespace "fr.skyost.rate_my_app"
-    compileSdkVersion 35
+    compileSdkVersion 34
 
     defaultConfig {
         minSdkVersion 24   // keep what you had (adjust if your app uses lower)
