@@ -1,47 +1,52 @@
 group 'fr.skyost.rate_my_app'
 version '1.1.1'
 
-buildscript {
-    ext.kotlin_version = '1.3.50'
-    repositories {
-        google()
-        jcenter()
-    }
-
-    dependencies {
-        classpath 'com.android.tools.build:gradle:3.5.0'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-    }
-}
-
-rootProject.allprojects {
-    repositories {
-        google()
-        jcenter()
-    }
-}
+// Let your app's root build provide AGP/Kotlin; remove old buildscript/classpaths.
 
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 android {
     namespace "fr.skyost.rate_my_app"
-    compileSdkVersion 34
+    compileSdkVersion 35
+
+    defaultConfig {
+        minSdkVersion 24   // keep what you had (adjust if your app uses lower)
+        // targetSdkVersion is not required for libraries
+    }
 
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
     }
-    defaultConfig {
-        minSdkVersion 24
+
+    // Align Java + Kotlin to JDK 17 (fixes the mismatched JVM-target error)
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
-    lintOptions {
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    // Replace deprecated lintOptions with lint { }
+    lint {
         disable 'InvalidPackage'
-    }
-    dependencies {
-        implementation 'com.google.android.play:core:1.8.0'
     }
 }
 
+repositories {
+    google()
+    mavenCentral()
+}
+
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    // Kotlin stdlib is added automatically by the Kotlin Gradle plugin; no need to pin jdk7.
+    // implementation "org.jetbrains.kotlin:kotlin-stdlib"
+
+    // In-app review / Play Core. Your code currently uses Play Core; bump to latest stable.
+    // If the plugin’s code uses the old Play Core APIs, 1.10.3 is a safe upgrade.
+    implementation 'com.google.android.play:core:1.10.3'
+
+    // If you later migrate the plugin code to the newer In-App Review APIs, switch to:
+    // implementation 'com.google.android.play:review-ktx:2.0.1'
 }
