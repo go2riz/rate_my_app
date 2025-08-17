@@ -19,26 +19,31 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 
 /**
- * The Rate my app plugin main class.
- * A lot of thanks to https://github.com/britannio/in_app_review and its author (This class has been inspired by his work).
+ * Rate my app plugin using Play In-App Review (no play-core).
  */
-public class RateMyAppPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
+class RateMyAppPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private var activity: Activity? = null
     private var context: Context? = null
     private lateinit var channel: MethodChannel
 
     private var reviewInfo: ReviewInfo? = null
 
-    override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-        channel = MethodChannel(flutterPluginBinding.binaryMessenger, "rate_my_app")
+    override fun onAttachedToEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        channel = MethodChannel(binding.binaryMessenger, "rate_my_app")
         channel.setMethodCallHandler(this)
-        context = flutterPluginBinding.applicationContext
+        context = binding.applicationContext
     }
 
     override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: Result) {
         when (call.method) {
             "launchNativeReviewDialog" -> requestReview(result)
             "isNativeDialogSupported" -> {
+                val ctx = context
+                if (ctx == null) {
+                    result.success(false)
+                    return
+                }
+                // Basic constraints + Play Store presence
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP || !isPlayStoreInstalled()) {
                     result.success(false)
                 } else {
@@ -71,115 +76,99 @@ public class RateMyAppPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         activity = null
     }
 
-    /**
-     * Caches the review info that will be obtained.
-     *
-     * @param result The method channel result object.
-     */
-
+    /** Pre-fetch ReviewInfo to know if native dialog is possible. */
     private fun cacheReviewInfo(result: Result) {
-        if (context == null) {
+        val ctx = context ?: run {
             result.error("context_is_null", "Android context not available.", null)
             return
         }
-        val manager = ReviewManagerFactory.create(context!!)
-        val request = manager.requestReviewFlow()
-        request.addOnCompleteListener { task ->
-            if (task.isSuccessful) {
-                reviewInfo = task.result
-                result.success(true)
-            } else {
-                result.success(false)
+        val manager = ReviewManagerFactory.create(ctx)
+        manager.requestReviewFlow()
+            .addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    reviewInfo = task.result
+                    result.success(true)
+                } else {
+                    // Not fatal—just means we can’t show native dialog now.
+                    result.success(false)
+                }
             }
-        }
     }
 
-    /**
-     * Requests a review.
-     *
-     * @param result The method channel result object.
-     */
-
+    /** Tries to show native review; falls back to false if not possible. */
     private fun requestReview(result: Result) {
-        if (context == null) {
+        val ctx = context ?: run {
             result.error("context_is_null", "Android context not available.", null)
             return
         }
-        if (activity == null) {
+        val act = activity ?: run {
             result.error("activity_is_null", "Android activity not available.", null)
-        }
-        val manager = ReviewManagerFactory.create(context!!)
-        if (reviewInfo != null) {
-            launchReviewFlow(result, manager, reviewInfo!!)
             return
         }
-        val request = manager.requestReviewFlow()
-        request.addOnCompleteListener { task ->
-            when {
-                task.isSuccessful -> launchReviewFlow(result, manager, task.result)
-                task.exception != null -> result.error(task.exception!!.javaClass.name, task.exception!!.localizedMessage, null)
-                else -> result.success(false)
-            }
+
+        val manager = ReviewManagerFactory.create(ctx)
+        val cached = reviewInfo
+        if (cached != null) {
+            launchReviewFlow(result, manager, cached, act)
+            return
         }
+
+        manager.requestReviewFlow()
+            .addOnCompleteListener { task ->
+                when {
+                    task.isSuccessful -> launchReviewFlow(result, manager, task.result, act)
+                    task.exception != null -> result.error(
+                        task.exception!!.javaClass.name,
+                        task.exception!!.localizedMessage,
+                        null
+                    )
+                    else -> result.success(false)
+                }
+            }
     }
 
-    /**
-     * Launches the review flow.
-     *
-     * @param result The method channel result object.
-     * @param manager The review manager.
-     * @param reviewInfo The review info object.
-     */
-
-    private fun launchReviewFlow(result: Result, manager: ReviewManager, reviewInfo: ReviewInfo) {
-        val flow = manager.launchReviewFlow(activity!!, reviewInfo)
-        flow.addOnCompleteListener { task ->
-            run {
-                this.reviewInfo = null
+    private fun launchReviewFlow(
+        result: Result,
+        manager: ReviewManager,
+        info: ReviewInfo,
+        act: Activity
+    ) {
+        manager.launchReviewFlow(act, info)
+            .addOnCompleteListener { task ->
+                reviewInfo = null
+                // Note: API doesn’t guarantee a dialog shows; success=true only means the flow completed.
                 result.success(task.isSuccessful)
             }
-        }
     }
 
-    /**
-     * Returns whether the Play Store is installed on the current device.
-     *
-     * @return Whether the Play Store is installed on the current device.
-     */
-
+    /** Checks if Play Store app exists (robust to null activity). */
     private fun isPlayStoreInstalled(): Boolean {
+        val ctx = activity ?: return false
         return try {
-            activity!!.packageManager.getPackageInfo("com.android.vending", 0)
+            ctx.packageManager.getPackageInfo("com.android.vending", 0)
             true
-        } catch (ex: PackageManager.NameNotFoundException) {
+        } catch (_: PackageManager.NameNotFoundException) {
             false
         }
     }
 
     /**
-     * Launches a Play Store instance.
-     *
-     * @param applicationId The application ID.
-     *
-     * @return 0 if everything is okay, 1 if the Play Store has not been opened, but the URL has been launched and 2 if it's not possible to open any of them.
+     * Opens Play Store (app or web).
+     * Returns: 0 = app opened, 1 = web opened, 2 = failed.
      */
-
     private fun goToPlayStore(applicationId: String?): Int {
-        if (activity == null) {
-            return 2
-        }
+        val act = activity ?: return 2
+        val id = applicationId ?: act.applicationContext.packageName
 
-        val id: String = applicationId ?: activity!!.applicationContext.packageName
-
-        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id"))
-        if (marketIntent.resolveActivity(activity!!.packageManager) != null) {
-            activity!!.startActivity(marketIntent)
+        val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$id"))
+        if (market.resolveActivity(act.packageManager) != null) {
+            act.startActivity(market)
             return 0
         }
 
-        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$id"))
-        if (browserIntent.resolveActivity(activity!!.packageManager) != null) {
-            activity!!.startActivity(browserIntent)
+        val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$id"))
+        if (web.resolveActivity(act.packageManager) != null) {
+            act.startActivity(web)
             return 1
         }
 
